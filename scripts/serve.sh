@@ -84,7 +84,7 @@ args=(
   --served-model-name "${SERVED_NAME:-pennyroyal}" --host 0.0.0.0 --port "$PORT" --tp 1
   --dtype bfloat16 --quantization modelopt_fp4 --kv-cache-dtype "$KVDTYPE"
   --mem-fraction-static "$MEMFRAC" --context-length "$CTX"
-  --page-size 64 --max-running-requests "$MAXREQ" --chunked-prefill-size 4096
+  --page-size 64 --max-running-requests "$MAXREQ" --chunked-prefill-size "${CHUNKED_PREFILL:-4096}"
   --cuda-graph-max-bs "$CUDAGRAPH_MAXBS"
   --mamba-ssm-dtype "$SSM_DTYPE" --max-mamba-cache-size "${MAMBA_CACHE:-24}"
   --mamba-radix-cache-strategy "$MAMBA_RADIX"

@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Unified launcher for Qwen3.8-Flash-Next NVFP4, TP1, RTX PRO 6000 Blackwell (sm120).
+#
+#   ./serve <profile> [extra sglang args...]
+#
+# PROFILES
+#   best     4-way, 262144 ctx (native), fp8 weight copies.   C1 ~231 tok/s   [VALIDATED upstream]
+#   single   2-way, 786432 ctx (YaRN x3), max KV pool.        C1 ~185 tok/s   [VALIDATED upstream]
+#   conc     16-way, 32768 ctx, throughput-oriented.          UNVERIFIED - see note below
+#
+#   ./serve list            show profiles and their settings
+#   ./serve best --port 9000    extra args pass through to sglang (argparse last-wins)
+#
+# Every value below is an env override:  MAXREQ=8 ./serve conc
+# Paths resolve from this script's location; BASE=/path/to/repo overrides.
+#
+# WARNING on 'conc': its concurrency values are reasoned starting points, NOT benchmarked.
+# 16-way cuda-graph capture is the most likely thing to OOM on first start; if it does, lower
+# MEMFRAC (0.90 -> 0.85) or CUDAGRAPH_MAXBS. Validate with scripts/bench_sglang.py before
+# trusting it. The 'best' and 'single' numbers above are upstream's, measured on their hardware.
+set -euo pipefail
+
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do _d="$(cd -P "$(dirname "$_self")" && pwd)"; _self="$(readlink "$_self")"; [[ "$_self" != /* ]] && _self="$_d/$_self"; done
+_SCRIPT_DIR="$(cd -P "$(dirname "$_self")" && pwd)"
+BASE="${BASE:-$_SCRIPT_DIR}"
+SERVE_SH="${SERVE_SH:-$BASE/scripts/serve.sh}"
+UNIT="${UNIT:-qwen-sglang}"
+MEMMAX="${MEMMAX:-}"          # e.g. 112G. Unset = no host-RAM cap.
+
+PROFILE="${1:-}"; [[ $# -gt 0 ]] && shift || true
+
+_yarn() {  # YaRN rope override; factor = CTX / 262144 (native window)
+  local factor="$1"
+  printf '{"text_config":{"rope_parameters":{"mrope_interleaved":true,"mrope_section":[11,11,10],"rope_type":"yarn","rope_theta":10000000,"partial_rotary_factor":0.25,"factor":%s,"original_max_position_embeddings":262144}}}' "$factor"
+}
+
+case "$PROFILE" in
+  best)
+    ENVS=(
+      MEMFRAC="${MEMFRAC:-0.95}" CTX="${CTX:-262144}" MAXREQ="${MAXREQ:-4}"
+      CUDAGRAPH_MAXBS="${CUDAGRAPH_MAXBS:-4}" MAMBA_CACHE="${MAMBA_CACHE:-24}"
+      SGLANG_SM120_LOWM_FP8_WEIGHT=1 SGLANG_SM120_LM_HEAD_FP8=1
+    ) ;;
+  single)
+    ENVS=(
+      MEMFRAC="${MEMFRAC:-0.98}" CTX="${CTX:-786432}" MAXREQ="${MAXREQ:-2}"
+      CUDAGRAPH_MAXBS="${CUDAGRAPH_MAXBS:-2}" MAMBA_CACHE="${MAMBA_CACHE:-12}"
+      SGLANG_SM120_LOWM_FP8_WEIGHT=0
+      ROPE_OVERRIDE="${ROPE_OVERRIDE:-$(_yarn 3.0)}"
+    ) ;;
+  conc)
+    # UNVERIFIED. 32768 is inside the native window, so no YaRN rope override is needed.
+    # CUDAGRAPH_MAXBS must be >= MAXREQ; MAMBA_CACHE is per-sequence state, so also >= MAXREQ.
+    # MEMFRAC is below 'best' deliberately: 16 captured cuda graphs need headroom.
+    ENVS=(
+      MEMFRAC="${MEMFRAC:-0.90}" CTX="${CTX:-32768}" MAXREQ="${MAXREQ:-16}"
+      CUDAGRAPH_MAXBS="${CUDAGRAPH_MAXBS:-16}" MAMBA_CACHE="${MAMBA_CACHE:-16}"
+      CHUNKED_PREFILL="${CHUNKED_PREFILL:-8192}"
+      SGLANG_SM120_LOWM_FP8_WEIGHT=1 SGLANG_SM120_LM_HEAD_FP8=1
+    ) ;;
+  list)
+    printf '%-8s %-8s %-6s %-9s %-8s %s\n' PROFILE CTX MAXREQ CUDAGRAPH MEMFRAC NOTE
+    printf '%-8s %-8s %-6s %-9s %-8s %s\n' best   262144 4  4  0.95 'validated upstream, ~231 tok/s C1'
+    printf '%-8s %-8s %-6s %-9s %-8s %s\n' single 786432 2  2  0.98 'validated upstream, ~185 tok/s C1'
+    printf '%-8s %-8s %-6s %-9s %-8s %s\n' conc    32768 16 16 0.90 'UNVERIFIED - benchmark before use'
+    exit 0 ;;
+  ""|-h|--help|help)
+    sed -n '2,22p' "$_self"; echo; echo "Profiles: best | single | conc | list"; exit 0 ;;
+  *)
+    echo "ERROR: unknown profile '$PROFILE' (want: best | single | conc | list)" >&2; exit 1 ;;
+esac
+
+# Settings shared by every profile (a profile above may override any of them).
+ENVS+=(
+  BASE="$BASE"
+  LINEAR_BACKEND="${LINEAR_BACKEND:-flashinfer}" SSM_DTYPE="${SSM_DTYPE:-bfloat16}"
+  MAMBA_RADIX="${MAMBA_RADIX:-extra_buffer}" KVDTYPE="${KVDTYPE:-fp8_e4m3}"
+  SPEC="${SPEC:-1}" HICACHE="${HICACHE:-0}" GDN_MTP_CACHE_MODE="${GDN_MTP_CACHE_MODE:-none}"
+  CPU_OFFLOAD_GB="${CPU_OFFLOAD_GB:-0}"
+  AUTOTUNE="${AUTOTUNE:-1}" MAX_JOBS="${MAX_JOBS:-4}"
+  FLASHINFER_NINJA_JOBS="${FLASHINFER_NINJA_JOBS:-4}" FLASHINFER_NVCC_THREADS="${FLASHINFER_NVCC_THREADS:-2}"
+)
+
+[[ -f "$SERVE_SH" ]] || { echo "ERROR: launcher not found at $SERVE_SH (set BASE or SERVE_SH)" >&2; exit 1; }
+mkdir -p "$BASE/logs"; rm -f "$BASE/logs/serve.log"
+echo "profile: $PROFILE   base: $BASE"
+
+# systemd --user is absent in most containers (no session bus) -> fall back to nohup.
+if systemctl --user show-environment >/dev/null 2>&1; then
+  systemctl --user stop "$UNIT" 2>/dev/null || true
+  for i in $(seq 1 40); do
+    [ "$(systemctl --user show "$UNIT" -p LoadState --value 2>/dev/null)" = "not-found" ] && break
+    systemctl --user reset-failed "$UNIT" 2>/dev/null || true; sleep 2
+  done
+  setenvs=(); for kv in "${ENVS[@]}"; do setenvs+=( --setenv="$kv" ); done
+  systemd-run --user --unit="$UNIT" \
+    ${MEMMAX:+--property=MemoryMax=$MEMMAX} --property=MemorySwapMax=0 \
+    "${setenvs[@]}" --working-directory="$BASE" \
+    -- bash -c 'exec bash "$0" "$@" > logs/serve.log 2>&1' "$SERVE_SH" "$@"
+  echo "started as user unit '$UNIT' ($(systemctl --user is-active "$UNIT"))"
+else
+  pkill -f "sglang.*--served-model-name" 2>/dev/null || true
+  sleep 2
+  env "${ENVS[@]}" nohup bash "$SERVE_SH" "$@" > "$BASE/logs/serve.log" 2>&1 &
+  echo $! > "$BASE/logs/serve.pid"
+  echo "started pid $(cat "$BASE/logs/serve.pid") (no systemd --user; stop: kill \$(cat $BASE/logs/serve.pid))"
+fi
+echo "ready when: curl -s http://127.0.0.1:${PORT:-8001}/health -> 200   (first ever start ~20 min autotune)"
+echo "log: $BASE/logs/serve.log"
