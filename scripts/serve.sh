@@ -2,10 +2,40 @@
 # Serve Qwen3.8-Flash-Next NVFP4 at TP1 on the RTX PRO 6000 (sm120), official sglang qwen4-main-squashed branch.
 # SAFE defaults; override via env to push toward jpezzulli's optimized profile.
 set -euo pipefail
-REPO=/home/golympie/ai-toolbox/models/sglang-official
-SGLANG=$REPO/.venv/bin/sglang
-TARGET_MODEL="${TARGET_MODEL:-/home/golympie/ai-toolbox/models/Qwen3.8-Flash-Next-NVFP4}"
-CACHE_BASE="${CACHE_BASE:-/home/golympie/ai-toolbox/models/qwen38fn/cache}"
+# Repo root: resolved from this script's own location, so the checkout works anywhere.
+# Override with BASE=/path/to/repo for an out-of-tree layout.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do _d="$(cd -P "$(dirname "$_self")" && pwd)"; _self="$(readlink "$_self")"; [[ "$_self" != /* ]] && _self="$_d/$_self"; done
+_SCRIPT_DIR="$(cd -P "$(dirname "$_self")" && pwd)"
+BASE="${BASE:-$(cd -P "$_SCRIPT_DIR/.." && pwd)}"
+REPO="${REPO:-$BASE/sglang-official}"
+# Pick an sglang launcher whose shebang interpreter actually exists. A venv that was created
+# elsewhere and then moved keeps absolute paths in its shebangs -> "bad interpreter". Skip those.
+_usable_sglang() {
+  local f="$1" shb interp
+  [[ -n "$f" && -x "$f" ]] || return 1
+  shb="$(head -c 256 "$f" 2>/dev/null | head -1)"
+  case "$shb" in
+    '#!'*) interp="${shb#\#!}"; interp="${interp%% *}"
+           [[ -x "$interp" ]] || { echo "WARN: $f -> missing interpreter $interp (moved/stale venv), skipping" >&2; return 1; } ;;
+  esac
+  return 0
+}
+SGLANG="${SGLANG:-}"
+if [[ -z "$SGLANG" ]]; then
+  for c in "$REPO/.venv/bin/sglang" "$BASE/.venv/bin/sglang" "$(command -v sglang || true)"; do
+    _usable_sglang "$c" && { SGLANG="$c"; break; }
+  done
+fi
+if [[ -z "$SGLANG" ]]; then
+  echo "ERROR: no usable sglang (looked in $REPO/.venv, $BASE/.venv, PATH)." >&2
+  echo "  A 'bad interpreter' shebang means the venv was created at another path and moved." >&2
+  echo "  Venvs are not relocatable - recreate it:" >&2
+  echo "    uv venv $REPO/.venv --python 3.12 && bash $BASE/scripts/do_build.sh" >&2
+  exit 1
+fi
+TARGET_MODEL="${TARGET_MODEL:-$BASE/models/Qwen3.8-Flash-Next-NVFP4}"
+CACHE_BASE="${CACHE_BASE:-$BASE/cache}"
 PORT="${PORT:-8001}"
 
 # ---- tunable knobs (safe defaults) ----
@@ -31,9 +61,12 @@ SSM_DTYPE="${SSM_DTYPE:-bfloat16}"
 MAMBA_RADIX="${MAMBA_RADIX:-extra_buffer}"
 
 mkdir -p "$CACHE_BASE"/{huggingface,torch,torchinductor,triton,flashinfer,sglang/jit}
-export CUDA_HOME=/usr/local/cuda CUDACXX=/usr/local/cuda/bin/nvcc
-export CC=gcc-13 CXX=g++-13 CUDAHOSTCXX=g++-13 TORCH_CUDA_ARCH_LIST=12.0
-export PATH=/home/golympie/.cargo/bin:/usr/local/cuda/bin:$PATH
+export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}" CUDACXX="${CUDA_HOME:-/usr/local/cuda}/bin/nvcc"
+export CC="${CC:-gcc}" CXX="${CXX:-g++}" CUDAHOSTCXX="${CUDAHOSTCXX:-${CXX:-g++}}" TORCH_CUDA_ARCH_LIST=12.0
+# CARGO_BIN: only prepended if it exists (rust toolchain is optional at serve time).
+CARGO_BIN="${CARGO_BIN:-$HOME/.cargo/bin}"
+[[ -d "$CARGO_BIN" ]] && export PATH="$CARGO_BIN:$PATH"
+export PATH="${CUDA_HOME:-/usr/local/cuda}/bin:$PATH"
 export HF_HOME="$CACHE_BASE/huggingface" XDG_CACHE_HOME="$CACHE_BASE"
 export TORCHINDUCTOR_CACHE_DIR="$CACHE_BASE/torchinductor" TRITON_CACHE_DIR="$CACHE_BASE/triton"
 export FLASHINFER_WORKSPACE_BASE="$CACHE_BASE/flashinfer"
@@ -66,7 +99,7 @@ args=(
 [[ "$MAMBA_RADIX" == "extra_buffer" ]] && args+=( --mamba-track-interval 64 )   # state tracking only exists for extra_buffer
 # RecoverSSM / WY output-only MTP verify (ported jpezzulli 280825c3e2, branch sm120-wy). jpezzulli: "none".
 [[ -n "${GDN_MTP_CACHE_MODE:-}" ]] && args+=( --gdn-mtp-cache-mode "$GDN_MTP_CACHE_MODE" )
-# MTP depth: jpezzulli = 3 steps / 4 draft tokens — and that is the MAXIMUM on this model/branch:
+# MTP depth: jpezzulli = 3 steps / 4 draft tokens - and that is the MAXIMUM on this model/branch:
 # SPEC_DRAFT must be <= the QSA compress ratio (4): "Qwen QSA requires speculative_num_draft_tokens <= the QSA compress
 # ratio (4): the pending index-key ring holds one group" (SPEC_STEPS=4 -> 5 draft tokens fails at startup, tested 2026-08-30).
 SPEC_STEPS="${SPEC_STEPS:-3}"; SPEC_DRAFT="${SPEC_DRAFT:-$((SPEC_STEPS+1))}"
@@ -79,7 +112,7 @@ SPEC_ACCEPT_SINGLE="${SPEC_ACCEPT_SINGLE:-0.3}"; SPEC_ACCEPT_ACC="${SPEC_ACCEPT_
 # draft logits ~4x cheaper; verification stays exact so only draft quality could dip (accept
 # length measured unchanged, gates + French pass). C1 200.8->219.4, C4 541->592 (temp 0.6).
 # Set SPEC_TOKEN_MAP=none to disable. Map = 32K base BPE + top code-corpus tokens + specials.
-SPEC_TOKEN_MAP="${SPEC_TOKEN_MAP:-/home/golympie/ai-toolbox/models/qwen38fn/hot_tokens_64k.pt}"
+SPEC_TOKEN_MAP="${SPEC_TOKEN_MAP:-$BASE/hot_tokens_64k.pt}"
 [[ "$SPEC" == "1" ]] && args+=( --speculative-algorithm NEXTN --speculative-num-steps "$SPEC_STEPS"
   --speculative-eagle-topk 1 --speculative-num-draft-tokens "$SPEC_DRAFT" --speculative-draft-model-quantization unquant
   --speculative-accept-threshold-single "$SPEC_ACCEPT_SINGLE" --speculative-accept-threshold-acc "$SPEC_ACCEPT_ACC" )
@@ -88,11 +121,19 @@ SPEC_TOKEN_MAP="${SPEC_TOKEN_MAP:-/home/golympie/ai-toolbox/models/qwen38fn/hot_
   --hicache-host-memory-mode cache --hicache-write-policy write_through --hicache-io-backend kernel )
 
 # Long-context YaRN rope override (factor = CTX/262144 for CTX beyond the native window).
-# Fields mirror the checkpoint's rope_parameters with rope_type default->yarn (jpezzulli ran
-# factor 2.0 = 524288; the 800K single-session profile uses 3.0 = 786432).
 [[ -n "${ROPE_OVERRIDE:-}" ]] && args+=( --json-model-override-args "$ROPE_OVERRIDE" )
 
-# Extra CLI args (e.g. from `omega --serve <key> [args...]`) are appended last; argparse last-wins
-# so they can override anything above (--port, --served-model-name, --context-length, ...).
-echo "sglang ${args[*]} $*"
-exec "$SGLANG" "${args[@]}" "$@"
+# Extra CLI args are appended last; argparse last-wins so they can override anything above.
+# Guard: only forward args that look like real flags (or values following one). A stray bare
+# word - e.g. the literal "c" leaked by a `systemd-run ... -- bash -c '...'` wrapper - would
+# otherwise reach argparse as "unrecognized arguments: c".
+extra=(); _prev_was_flag=0
+for a in "$@"; do
+  case "$a" in
+    -*) extra+=( "$a" ); _prev_was_flag=1 ;;
+    *)  if [[ "$_prev_was_flag" == "1" ]]; then extra+=( "$a" ); _prev_was_flag=0
+        else echo "WARN: dropping stray non-flag argument: '$a'" >&2; fi ;;
+  esac
+done
+echo "sglang ${args[*]} ${extra[*]-}"
+exec "$SGLANG" "${args[@]}" ${extra[@]+"${extra[@]}"}
