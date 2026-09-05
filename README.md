@@ -1,5 +1,21 @@
 # sglang-flashnext-sm120
 
+> ### ⚠️ Experimental fork — not production quality
+>
+> This is a personal **fork** of
+> [gabrielolympie/sglang-flashnext-sm120](https://github.com/gabrielolympie/sglang-flashnext-sm120).
+> All of the original work — the patches, the tuning, the benchmarks below — is theirs.
+>
+> This fork exists only to make the launch scripts runnable outside the original author's
+> machine (paths were hardcoded) and to fix a few startup failures found while bringing the
+> stack up on a rented GPU container. It is scratch work from a debugging session, offered
+> as-is: **not tested at production scale, not maintained, and carrying no guarantee that it
+> matches upstream behaviour.** Use the upstream repo unless you specifically need these fixes.
+>
+> **The performance numbers below were measured by the upstream author on their own hardware.
+> They have not been reproduced here.**
+
+
 **Qwen3.8-Flash-Next (180B MoE, NVFP4) at 231 tok/s single-stream on a single RTX PRO 6000 Blackwell (96 GB, sm120).**
 
 Patches, launch scripts and benchmarks for serving `RadixArk/Qwen3.8-Flash-Next-NVFP4` at TP1
@@ -29,6 +45,36 @@ validated with needle retrieval at 653K-token depth (start / middle / end all pa
 
 Validated with greedy/needle/cached-prefix/GSM/code gates and 2.4M tokens of soak testing
 (0 errors, flat VRAM/RAM).
+
+## Changes in this fork
+
+Scripts resolve the repo root from their own location, so a checkout works anywhere.
+`BASE`, `REPO`, `TARGET_MODEL`, `CACHE_BASE`, `CARGO_BIN` and `MEMMAX` are all env-overridable;
+nothing is hardcoded to a particular machine.
+
+Three startup failures fixed:
+
+- `sglang serve: error: unrecognized arguments: c` — `serve_single.sh` ran
+  `bash -c 'exec bash serve.sh ...'` with no `$0`, so a literal `c` reached the CLI.
+- `bad interpreter: No such file or directory` — a venv created at one path and then moved
+  keeps absolute shebangs. The launcher probe now skips those and prints the recreate command.
+- `systemd --user` is absent in most containers, so the unit could never start; it now falls
+  back to `nohup` + pidfile.
+
+`do_build.sh` locates `uv` rather than assuming a miniconda path, fails early if the venv is
+missing, and scales build jobs to `nproc` (24 was sized for a 32-core host; each `cicc` is ~3 GB).
+
+### Host packages
+
+On a fresh container the Triton/FlashInfer JIT needs two things that are easy to miss:
+
+```bash
+apt-get install -y python3.10-dev    # else: fatal error: Python.h: No such file or directory
+pip install ninja                    # else: FileNotFoundError: 'ninja'
+```
+
+Match `python3.X-dev` to the venv interpreter:
+`.venv/bin/python -c "import sysconfig; print(sysconfig.get_paths()['include'])"`
 
 ## Contents
 
