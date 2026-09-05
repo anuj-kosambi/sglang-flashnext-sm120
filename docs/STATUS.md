@@ -4,7 +4,7 @@
 Official sglang `qwen4-main-squashed` branch + local commits on `sm120-wy` (see git log in
 `../sglang-official`). No Docker. **Beats jpezzulli/sglang-rtxpro6000's published figures by ~35-45%.**
 
-## Result (stable `serve_best.sh` build, warm)
+## Result (stable `best` profile, warm)
 | | jpezzulli | ours (temp 0.6) | ours (greedy = lossless) |
 |---|---|---|---|
 | Decode C1 | 171 tok/s | **231.0 median / 234.6 best** | 202.9 / 205.0 |
@@ -23,9 +23,9 @@ cached-prefix identical · 5-8× GSM-style @0.6 · code spot · French. VRAM pea
 
 ## Run — two profiles (same unit `qwen-sglang`, same endpoint; one command to switch)
 ```bash
-./serve_best.sh      # DEFAULT: interactive + agents. 4-way, fp8 stack on,
+./serve.sh best      # DEFAULT: interactive + agents. 4-way, fp8 stack on,
                      # ctx 262144 (native), KV pool ~572K tokens, C1 ~231 tok/s.
-./serve_single.sh    # ONE HUGE SESSION: ctx 786432 (YaRN x3), KV pool ~827K tokens,
+./serve.sh single    # ONE HUGE SESSION: ctx 786432 (YaRN x3), KV pool ~827K tokens,
                      # C1 ~185 tok/s (fp8 dense copies traded for KV head-room).
 curl -s http://127.0.0.1:8001/health    # 200 when ready (~5 min)
 systemctl --user stop qwen-sglang       # stop

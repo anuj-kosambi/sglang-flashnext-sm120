@@ -7,7 +7,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: qwen-flashnext:local
-    # ./serve <profile>; ENTRYPOINT is ./serve, so this is just the argument.
+    # ./serve.sh <profile>; ENTRYPOINT is ./serve.sh, so this is just the argument.
     command: ["${PROFILE:-best}"]
     ports: ["${PORT:-8001}:8001"]
     volumes:

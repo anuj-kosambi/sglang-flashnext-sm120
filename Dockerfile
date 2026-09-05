@@ -16,7 +16,7 @@
 #     docker run --gpus all -p 8001:8001 \
 #       -v /path/to/Qwen3.8-Flash-Next-NVFP4:/opt/qwen/models/Qwen3.8-Flash-Next-NVFP4:ro \
 #       -v qwen-cache:/opt/qwen/cache \
-#       qwen-flashnext ./serve best
+#       qwen-flashnext best
 #
 #  The named cache volume matters: FlashInfer autotune JIT-compiles kernels on
 #  first start (~20 min per the README). Without a persistent cache every fresh
@@ -51,8 +51,8 @@ RUN pip3 install --no-cache-dir uv ninja
 # Repo scripts first, so edits to them don't invalidate the expensive build layer.
 COPY scripts/ ${QWEN_HOME}/scripts/
 COPY patches/ ${QWEN_HOME}/patches/
-COPY serve hot_tokens_64k.pt ${QWEN_HOME}/
-RUN chmod +x ${QWEN_HOME}/serve ${QWEN_HOME}/scripts/*.sh
+COPY serve.sh hot_tokens_64k.pt ${QWEN_HOME}/
+RUN chmod +x ${QWEN_HOME}/serve.sh ${QWEN_HOME}/scripts/*.sh
 
 # Build sglang, then apply the six sm120 patches — this is the README's order:
 # do_build.sh installs the editable tree first, patches land on it afterwards.
@@ -76,11 +76,11 @@ ENV BASE=${QWEN_HOME} \
     PORT=8001
 EXPOSE 8001
 
-# No systemd in a container, so ./serve takes its nohup branch. Run it in the
+# No systemd in a container, so ./serve.sh would take its nohup branch. Run it in the
 # foreground instead so the container's lifetime tracks the server's.
 ENV FOREGROUND=1
 HEALTHCHECK --interval=30s --timeout=5s --start-period=25m --retries=3 \
   CMD curl -fsS http://127.0.0.1:8001/health || exit 1
 
-ENTRYPOINT ["./serve"]
+ENTRYPOINT ["./serve.sh"]
 CMD ["best"]

@@ -33,7 +33,7 @@ then goes ~35-45% past its published numbers.
 | Prefill (2.5K) | 10–12K | ~10.4K tok/s | |
 | TTFT | — | ~135 ms | |
 
-Launch profiles, selected as an argument to the unified launcher (`./serve <profile>`):
+Launch profiles, selected as an argument to the single launcher (`./serve.sh <profile>`):
 
 | profile | context window | concurrency | KV pool | decode C1 |
 |---|---|---|---|---|
@@ -58,7 +58,7 @@ nothing is hardcoded to a particular machine.
 
 Three startup failures fixed:
 
-- `sglang serve: error: unrecognized arguments: c` — `serve_single.sh` ran
+- `sglang serve: error: unrecognized arguments: c` — the old `serve_single.sh` ran
   `bash -c 'exec bash serve.sh ...'` with no `$0`, so a literal `c` reached the CLI.
 - `bad interpreter: No such file or directory` — a venv created at one path and then moved
   keeps absolute shebangs. The launcher probe now skips those and prints the recreate command.
@@ -84,9 +84,8 @@ Match `python3.X-dev` to the venv interpreter:
 
 ```
 patches/            six patches against sgl-project/sglang @ qwen4-main-squashed
-serve               unified launcher: ./serve best|single|conc|list
+serve.sh            the launcher: ./serve.sh best|single|conc|list
 Dockerfile          container build (UNTESTED) · docker-compose.yml · .dockerignore
-scripts/            serve.sh (knobbed core) · serve_best.sh · serve_single.sh (compat shims)
                     bench_sglang.py · make_hot_tokens.py · do_build.sh
 docs/               STATUS.md (ops guide) · PERF_CEILING.md (analysis + dead-ends)
 results/            benchmark JSONs, baseline -> final
@@ -106,7 +105,7 @@ hot_tokens_64k.pt   FR-Spec draft-vocab map
 6. `0006` — same fp8 treatment for the HyperConnection mix and the lm_head (also halves
    every MTP draft step's logits).
 
-**Config levers** (in `scripts/serve.sh`, each documented inline with its measured ladder):
+**Config levers** (in `serve.sh`, each documented inline with its measured ladder):
 - Relaxed MTP acceptance `0.3` (C1 179 → 231; exact at temp 0, set `1.0` for lossless sampling).
 - FR-Spec: draft head scores a 64K hot-token subset of the 248K vocab (verify stays exact).
 - 8-way concurrency: `--max-mamba-cache-size` must be ~6× max-running-requests or the
@@ -117,7 +116,7 @@ hot_tokens_64k.pt   FR-Spec draft-vocab map
 ```bash
 # model checkpoint (~135 GB; the ~50 GB PLE n-gram table is served from host RAM)
 hf download RadixArk/Qwen3.8-Flash-Next-NVFP4 --local-dir Qwen3.8-Flash-Next-NVFP4
-# note: hf_xet can stall on the largest shards; scripts/serve.sh's docs and
+# note: hf_xet can stall on the largest shards; serve.sh's docs and
 # docs/STATUS.md describe the curl fallback that resumes reliably.
 
 git clone -b qwen4-main-squashed https://github.com/sgl-project/sglang sglang-official
@@ -127,8 +126,8 @@ git apply ../patches/0003-sm120-fp32-prefill-state.patch
 git apply ../patches/0001b-recoverssm-wy-sm120-PORTED.patch
 git am    ../patches/0004*.patch ../patches/0005*.patch ../patches/0006*.patch
 # paths resolve from the repo location - nothing to edit. Then:
-./serve best                   # OpenAI API on :8001, ~5 min to ready
-./serve list                   # show all profiles and their settings
+./serve.sh best                # OpenAI API on :8001, ~5 min to ready
+./serve.sh list                # show all profiles and their settings
 ```
 
 Single-GPU-with-display safety knobs (learned the hard way): keep `--cuda-graph-max-bs`
@@ -161,7 +160,7 @@ Two things that matter:
 - **`-v qwen-cache:/opt/qwen/cache`** — FlashInfer autotune JIT-compiles kernels on first
   start (~20 min). A persistent cache volume means you pay that once, not per container. It
   cannot be baked into the image, since compiling needs a GPU at build time.
-- **`FOREGROUND=1`** — makes `./serve` exec the server instead of detaching. Without it a
+- **`FOREGROUND=1`** — makes `./serve.sh` exec the server instead of detaching. Without it a
   backgrounded PID 1 exits and takes the container with it. The compose file sets it already.
 
 Requires the NVIDIA Container Toolkit on the host; the driver comes from the host, not the
