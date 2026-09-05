@@ -1,0 +1,9 @@
+# Never send weights, caches, logs or results into the build context.
+models/
+cache/
+logs/
+results_sglang.json
+sglang-official/
+.venv/
+.git/
+*.log

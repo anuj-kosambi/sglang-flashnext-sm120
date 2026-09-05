@@ -85,6 +85,7 @@ Match `python3.X-dev` to the venv interpreter:
 ```
 patches/            six patches against sgl-project/sglang @ qwen4-main-squashed
 serve               unified launcher: ./serve best|single|conc|list
+Dockerfile          container build (UNTESTED) · docker-compose.yml · .dockerignore
 scripts/            serve.sh (knobbed core) · serve_best.sh · serve_single.sh (compat shims)
                     bench_sglang.py · make_hot_tokens.py · do_build.sh
 docs/               STATUS.md (ops guide) · PERF_CEILING.md (analysis + dead-ends)
@@ -133,6 +134,39 @@ git am    ../patches/0004*.patch ../patches/0005*.patch ../patches/0006*.patch
 Single-GPU-with-display safety knobs (learned the hard way): keep `--cuda-graph-max-bs`
 small, cap JIT compilation with `MAX_JOBS=4`, run under a systemd `MemoryMax` cage.
 Details and every explored dead-end: `docs/`.
+
+## Docker (untested)
+
+> **This has never been built or run.** It encodes the manual steps below plus the two host
+> packages that are easy to miss (`python3.10-dev`, `ninja`). Expect to fix something on the
+> first `docker build`.
+
+Weights are **not** baked into the image (~135 GB) — mount them:
+
+```bash
+./scripts/fetch_model.sh /data/Qwen3.8-Flash-Next-NVFP4     # ~135 GB, resumable
+
+docker build -t qwen-flashnext .
+docker run --gpus all -p 8001:8001 -e FOREGROUND=1 \
+  -v /data/Qwen3.8-Flash-Next-NVFP4:/opt/qwen/models/Qwen3.8-Flash-Next-NVFP4:ro \
+  -v qwen-cache:/opt/qwen/cache \
+  qwen-flashnext best
+
+# or
+MODEL_DIR=/data/Qwen3.8-Flash-Next-NVFP4 PROFILE=conc docker compose up
+```
+
+Two things that matter:
+
+- **`-v qwen-cache:/opt/qwen/cache`** — FlashInfer autotune JIT-compiles kernels on first
+  start (~20 min). A persistent cache volume means you pay that once, not per container. It
+  cannot be baked into the image, since compiling needs a GPU at build time.
+- **`FOREGROUND=1`** — makes `./serve` exec the server instead of detaching. Without it a
+  backgrounded PID 1 exits and takes the container with it. The compose file sets it already.
+
+Requires the NVIDIA Container Toolkit on the host; the driver comes from the host, not the
+image. The base is CUDA 13.0 `devel` (not `runtime`) because `nvcc` is needed for the runtime
+kernel JIT, and it matches the `cu130` wheel index `do_build.sh` installs from.
 
 ## Credits
 

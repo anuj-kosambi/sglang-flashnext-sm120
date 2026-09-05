@@ -12,6 +12,8 @@
 #   ./serve best --port 9000    extra args pass through to sglang (argparse last-wins)
 #
 # Every value below is an env override:  MAXREQ=8 ./serve conc
+# FOREGROUND=1 runs sglang in the foreground (exec, no fork) instead of detaching -
+# required in a container, where a backgrounded PID 1 would exit immediately.
 # Paths resolve from this script's location; BASE=/path/to/repo overrides.
 #
 # WARNING on 'conc': its concurrency values are reasoned starting points, NOT benchmarked.
@@ -88,8 +90,12 @@ ENVS+=(
 mkdir -p "$BASE/logs"; rm -f "$BASE/logs/serve.log"
 echo "profile: $PROFILE   base: $BASE"
 
-# systemd --user is absent in most containers (no session bus) -> fall back to nohup.
-if systemctl --user show-environment >/dev/null 2>&1; then
+# FOREGROUND=1 wins over everything: in a container we must BE the process, even if a
+# session bus happens to exist. Otherwise systemd --user if available, else nohup.
+if [[ "${FOREGROUND:-0}" == "1" ]]; then
+  echo "running in foreground (FOREGROUND=1); logging to stdout and $BASE/logs/serve.log"
+  exec env "${ENVS[@]}" bash "$SERVE_SH" "$@" 2>&1 | tee "$BASE/logs/serve.log"
+elif systemctl --user show-environment >/dev/null 2>&1; then
   systemctl --user stop "$UNIT" 2>/dev/null || true
   for i in $(seq 1 40); do
     [ "$(systemctl --user show "$UNIT" -p LoadState --value 2>/dev/null)" = "not-found" ] && break

@@ -1,0 +1,35 @@
+# UNTESTED - see Dockerfile header. Weights are mounted, never baked into the image.
+#   MODEL_DIR=/path/to/Qwen3.8-Flash-Next-NVFP4 docker compose up
+#   PROFILE=conc docker compose up          # pick a profile
+services:
+  qwen:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: qwen-flashnext:local
+    # ./serve <profile>; ENTRYPOINT is ./serve, so this is just the argument.
+    command: ["${PROFILE:-best}"]
+    ports: ["${PORT:-8001}:8001"]
+    volumes:
+      # ~135 GB of weights, read-only. Required.
+      - "${MODEL_DIR:?set MODEL_DIR to your Qwen3.8-Flash-Next-NVFP4 directory}:/opt/qwen/models/Qwen3.8-Flash-Next-NVFP4:ro"
+      # Persist the JIT/autotune cache so the ~20 min first-start compile happens once.
+      - qwen-cache:/opt/qwen/cache
+    environment:
+      FOREGROUND: "1"          # be PID 1; a backgrounded server would exit the container
+      # Any serve.sh knob can be set here, e.g.:
+      # MEMFRAC: "0.90"
+      # CTX: "32768"
+    # Host RAM cage: the kernel JIT can otherwise balloon (cicc ~3GB each).
+    mem_limit: "${MEM_LIMIT:-112g}"
+    shm_size: "16gb"           # torch dataloader / IPC
+    stop_grace_period: 60s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+volumes:
+  qwen-cache:
