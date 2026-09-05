@@ -33,12 +33,16 @@ then goes ~35-45% past its published numbers.
 | Prefill (2.5K) | 10–12K | ~10.4K tok/s | |
 | TTFT | — | ~135 ms | |
 
-Two launch profiles:
+Launch profiles, selected as an argument to the unified launcher (`./serve <profile>`):
 
-| profile | context window | KV pool | decode C1 |
-|---|---|---|---|
-| `serve_best.sh` — interactive + agents (4-way) | 262144 (native) | ~572K tokens | **231 tok/s** |
-| `serve_single.sh` — one huge session | **786432** (YaRN ×3) | **~827K tokens** | 185 tok/s |
+| profile | context window | concurrency | KV pool | decode C1 |
+|---|---|---|---|---|
+| `best` — interactive + agents | 262144 (native) | 4-way | ~572K tokens | **231 tok/s** |
+| `single` — one huge session | **786432** (YaRN ×3) | 2-way | **~827K tokens** | 185 tok/s |
+| `conc` — throughput *(added in this fork)* | 32768 (native) | 16-way | — | **unbenchmarked** |
+
+`best` and `single` carry the upstream-validated settings unchanged. `conc` is new here and its
+values are reasoned rather than measured — see [Changes in this fork](#changes-in-this-fork).
 
 The long-context profile trades the fp8 dense-weight copies back for KV head-room and is
 validated with needle retrieval at 653K-token depth (start / middle / end all pass).
@@ -80,7 +84,8 @@ Match `python3.X-dev` to the venv interpreter:
 
 ```
 patches/            six patches against sgl-project/sglang @ qwen4-main-squashed
-scripts/            serve.sh (knobbed launcher) · serve_best.sh · serve_single.sh (786K ctx)
+serve               unified launcher: ./serve best|single|conc|list
+scripts/            serve.sh (knobbed core) · serve_best.sh · serve_single.sh (compat shims)
                     bench_sglang.py · make_hot_tokens.py · do_build.sh
 docs/               STATUS.md (ops guide) · PERF_CEILING.md (analysis + dead-ends)
 results/            benchmark JSONs, baseline -> final
@@ -120,8 +125,9 @@ git apply ../patches/0002-fp8-qsa-tile-dequant.patch --exclude='test/*'
 git apply ../patches/0003-sm120-fp32-prefill-state.patch
 git apply ../patches/0001b-recoverssm-wy-sm120-PORTED.patch
 git am    ../patches/0004*.patch ../patches/0005*.patch ../patches/0006*.patch
-# point scripts/serve.sh at your paths, then:
-./scripts/serve_best.sh        # OpenAI API on :8001, ~5 min to ready
+# paths resolve from the repo location - nothing to edit. Then:
+./serve best                   # OpenAI API on :8001, ~5 min to ready
+./serve list                   # show all profiles and their settings
 ```
 
 Single-GPU-with-display safety knobs (learned the hard way): keep `--cuda-graph-max-bs`

@@ -51,11 +51,13 @@ case "$PROFILE" in
     ) ;;
   conc)
     # UNVERIFIED. 32768 is inside the native window, so no YaRN rope override is needed.
-    # CUDAGRAPH_MAXBS must be >= MAXREQ; MAMBA_CACHE is per-sequence state, so also >= MAXREQ.
+    # CUDAGRAPH_MAXBS must be >= MAXREQ. MAMBA_CACHE must be ~6x MAXREQ (96 here): upstream
+    # measured that a smaller value silently caps the speculative CUDA graphs at bs=4, making
+    # 8-way run SLOWER than 4-way. It fails quietly, so do not lower it without benchmarking.
     # MEMFRAC is below 'best' deliberately: 16 captured cuda graphs need headroom.
     ENVS=(
       MEMFRAC="${MEMFRAC:-0.90}" CTX="${CTX:-32768}" MAXREQ="${MAXREQ:-16}"
-      CUDAGRAPH_MAXBS="${CUDAGRAPH_MAXBS:-16}" MAMBA_CACHE="${MAMBA_CACHE:-16}"
+      CUDAGRAPH_MAXBS="${CUDAGRAPH_MAXBS:-16}" MAMBA_CACHE="${MAMBA_CACHE:-96}"
       CHUNKED_PREFILL="${CHUNKED_PREFILL:-8192}"
       SGLANG_SM120_LOWM_FP8_WEIGHT=1 SGLANG_SM120_LM_HEAD_FP8=1
     ) ;;
